@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#1c1f22">
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" type="image/png" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>Ground fault monitor</title>
+<style>
+  :root {
+    --bg: #1c1f22;
+    --panel: #26292e;
+    --panel-edge: #34383e;
+    --line: #3a3e44;
+    --text: #e8e6e1;
+    --muted: #9ba0a6;
+    --lcd-bg: #0d1a12;
+    --lcd-dim: #2a4633;
+    --lcd: #8cf08c;
+    --amber: #f0a93b;
+    --amber-dim: #4a3512;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    min-height: 100vh;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--line); margin-bottom: 16px;
+  }
+  header h1 { font-size: 17px; font-weight: 600; letter-spacing: 0.02em; }
+  header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .status {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    padding: 6px 12px; border-radius: 999px;
+  }
+  .led {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--amber); flex-shrink: 0;
+  }
+  .connected .led { background: var(--lcd); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) { .connected .led { animation: none; } }
+
+  .lcd {
+    background: var(--lcd-bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    padding: 22px 18px;
+    margin-bottom: 16px;
+    box-shadow: inset 0 2px 10px rgba(0,0,0,0.5);
+  }
+  .lcd .label {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--lcd-dim); margin-bottom: 8px;
+  }
+  .lcd .value {
+    font-size: 32px; color: var(--lcd);
+    word-break: break-all; line-height: 1.25; min-height: 40px;
+  }
+  .lcd .meta { font-size: 12px; color: var(--lcd-dim); margin-top: 10px; }
+
+  button {
+    font: inherit; color: var(--text); cursor: pointer;
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 10px; padding: 14px 18px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:active { background: var(--panel-edge); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--lcd); outline-offset: 2px; }
+
+  #btnConnect { width: 100%; font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+
+  .sendrow { display: flex; gap: 8px; margin-bottom: 16px; }
+  .sendrow input {
+    flex: 1; font: inherit; font-size: 16px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--panel-edge); border-radius: 10px;
+    padding: 12px 14px; min-width: 0;
+  }
+  .sendrow input::placeholder { color: var(--muted); }
+  .sendrow button { flex-shrink: 0; }
+
+  .loghead {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .loghead h2 {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .loghead button { font-size: 12px; padding: 5px 10px; border-radius: 7px; }
+
+  #log {
+    background: var(--panel); border: 1px solid var(--panel-edge);
+    border-radius: 10px; padding: 10px 12px;
+    height: 260px; overflow-y: auto;
+    font-size: 13px; line-height: 1.7;
+  }
+  #log .row { display: flex; gap: 8px; }
+  #log .t { color: var(--muted); flex-shrink: 0; }
+  #log .rx { color: var(--lcd); }
+  #log .tx { color: var(--amber); }
+  #log .sys { color: var(--muted); font-style: italic; }
+  #log:empty::before { content: "No traffic yet."; color: var(--muted); font-style: italic; }
+
+  .note { font-size: 12px; color: var(--muted); margin-top: 14px; line-height: 1.6; }
+  .warn {
+    background: var(--panel); border: 1px solid var(--amber);
+    color: var(--amber); border-radius: 10px;
+    padding: 12px 14px; font-size: 14px; line-height: 1.5;
+    margin-bottom: 16px; display: none;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <img src="./logo.png" alt="Andrews Survey" style="height: 42px; width: auto; border-radius: 6px; display: block;">
+      <div>
+        <h1>Ground fault monitor</h1>
+        <div class="sub">Andrews Survey &middot; ESP32-S3 BLE link</div>
+      </div>
+    </div>
+    <div class="status" id="status"><span class="led"></span><span id="statusText">Disconnected</span></div>
+  </header>
+
+  <div class="warn" id="noBle">
+    Web Bluetooth isn't available in this browser. On iPhone or iPad, open this
+    page in the <strong>Bluefy</strong> app. On Android or desktop, use Chrome or Edge.
+  </div>
+
+  <button id="btnConnect">Connect to monitor</button>
+
+  <div class="lcd">
+    <div class="label">Live reading</div>
+    <div class="value mono" id="reading">&mdash;</div>
+    <div class="meta mono" id="readingMeta">waiting for connection</div>
+  </div>
+
+  <div class="sendrow">
+    <input id="txInput" class="mono" type="text" placeholder="Send a command&hellip;"
+           autocomplete="off" autocapitalize="off" spellcheck="false" disabled>
+    <button id="btnSend" disabled>Send</button>
+  </div>
+
+  <div class="loghead">
+    <h2>Traffic log</h2>
+    <button id="btnClear">Clear</button>
+  </div>
+  <div id="log" class="mono" aria-live="polite"></div>
+
+  <p class="note">
+    Green entries are received from the device, amber entries were sent to it.
+    The link uses the Nordic UART Service; if the device drops out, tap
+    Connect to monitor again.
+  </p>
+
+<script>
+(function () {
+  "use strict";
+
+  // Web Bluetooth requires lowercase UUIDs
+  var NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  var NUS_RX      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"; // page -> ESP32
+  var NUS_TX      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // ESP32 -> page
+
+  var device = null, rxChar = null, txChar = null;
+  var msgCount = 0;
+  var MAX_LOG_ROWS = 200;
+
+  var els = {
+    status: document.getElementById("status"),
+    statusText: document.getElementById("statusText"),
+    connect: document.getElementById("btnConnect"),
+    reading: document.getElementById("reading"),
+    readingMeta: document.getElementById("readingMeta"),
+    input: document.getElementById("txInput"),
+    send: document.getElementById("btnSend"),
+    clear: document.getElementById("btnClear"),
+    log: document.getElementById("log"),
+    noBle: document.getElementById("noBle")
+  };
+
+  if (!navigator.bluetooth) {
+    els.noBle.style.display = "block";
+    els.connect.disabled = true;
+  }
+
+  function now() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
+  function log(kind, text) {
+    var row = document.createElement("div");
+    row.className = "row";
+    var t = document.createElement("span");
+    t.className = "t";
+    t.textContent = now();
+    var m = document.createElement("span");
+    m.className = kind;
+    m.textContent = (kind === "rx" ? "\u2190 " : kind === "tx" ? "\u2192 " : "") + text;
+    row.appendChild(t);
+    row.appendChild(m);
+    els.log.appendChild(row);
+    while (els.log.children.length > MAX_LOG_ROWS) els.log.removeChild(els.log.firstChild);
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+
+  function setConnected(on, name) {
+    els.status.classList.toggle("connected", on);
+    els.statusText.textContent = on ? ("Connected: " + (name || "device")) : "Disconnected";
+    els.input.disabled = !on;
+    els.send.disabled = !on;
+    els.connect.textContent = on ? "Reconnect" : "Connect to monitor";
+    if (!on) els.readingMeta.textContent = "link lost \u2014 tap connect";
+  }
+
+  function onNotify(event) {
+    var text = new TextDecoder().decode(event.target.value);
+    msgCount++;
+    els.reading.textContent = text;
+    els.readingMeta.textContent = "msg #" + msgCount + " \u00b7 " + now();
+    log("rx", text);
+  }
+
+  function onDisconnected() {
+    setConnected(false);
+    log("sys", "device disconnected");
+  }
+
+  async function connect() {
+    try {
+      if (!device) {
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [NUS_SERVICE] }, { namePrefix: "GFM" }],
+          optionalServices: [NUS_SERVICE]
+        });
+        device.addEventListener("gattserverdisconnected", onDisconnected);
+      }
+      log("sys", "connecting\u2026");
+      var server = await device.gatt.connect();
+      var service = await server.getPrimaryService(NUS_SERVICE);
+      txChar = await service.getCharacteristic(NUS_TX);
+      rxChar = await service.getCharacteristic(NUS_RX);
+      await txChar.startNotifications();
+      txChar.addEventListener("characteristicvaluechanged", onNotify);
+      setConnected(true, device.name);
+      log("sys", "connected to " + (device.name || "device"));
+      els.readingMeta.textContent = "connected \u00b7 waiting for data";
+    } catch (err) {
+      log("sys", "error: " + err.message);
+      if (err.name === "NotFoundError") device = null; // user cancelled picker
+      setConnected(false);
+    }
+  }
+
+  async function send() {
+    var text = els.input.value.trim();
+    if (!text || !rxChar) return;
+    try {
+      var bytes = new TextEncoder().encode(text);
+      // Chunk to 20 bytes to stay inside the default BLE payload
+      for (var i = 0; i < bytes.length; i += 20) {
+        var chunk = bytes.slice(i, i + 20);
+        if (rxChar.properties.writeWithoutResponse) {
+          await rxChar.writeValueWithoutResponse(chunk);
+        } else {
+          await rxChar.writeValue(chunk);
+        }
+      }
+      log("tx", text);
+      els.input.value = "";
+    } catch (err) {
+      log("sys", "send failed: " + err.message);
+    }
+  }
+
+  els.connect.addEventListener("click", connect);
+  els.send.addEventListener("click", send);
+  els.input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") send();
+  });
+  els.clear.addEventListener("click", function () {
+    els.log.textContent = "";
+  });
+
+  // Offline support: register the service worker
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("./sw.js").then(function (reg) {
+        if (!navigator.serviceWorker.controller) {
+          log("sys", "offline copy saved \u2014 this page now works without internet");
+        }
+        reg.addEventListener("updatefound", function () {
+          log("sys", "newer version downloaded \u2014 will apply next time you open the page");
+        });
+      }).catch(function (err) {
+        log("sys", "offline caching unavailable: " + err.message);
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>
